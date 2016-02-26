@@ -1,0 +1,16 @@
+{
+  "name": "mailchimp-to-wordpress",
+  "version": "1.0.0",
+  "description": "A node script to parse a Mailchimp archive, extract part of its content and post it to a Wordpress website via REST API",
+  "main": "index.js",
+  "scripts": {
+    "import": "node index.js"
+  },
+  "author": "Cristiano Rastelli",
+  "license": "MIT",
+  "devDependencies": {
+    "cheerio": "^0.20.0",
+    "request": "^2.69.0",
+    "wordpress-rest-api": "^0.6.0"
+  }
+}
