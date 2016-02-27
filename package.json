@@ -9,6 +9,7 @@
   "author": "Cristiano Rastelli",
   "license": "MIT",
   "devDependencies": {
+    "chalk": "^1.1.1",
     "cheerio": "^0.20.0",
     "request": "^2.69.0",
     "wordpress-rest-api": "^0.6.0"
