@@ -56,8 +56,8 @@ request(mailchimpOpts, function (error, response, jscode) {
                 console.log('going to add ' + chalk.bold.magenta(issuesMissing.length) + ' issues to Wordpress');
 
                 issuesMissing.forEach(function(issueURL){
-                    console.log(chalk.bold.green('>>> importing issue ' + issueURL));
                     request({method:'GET',url:issueURL,normalizeWhitespace:true}, function (error, response, htmlcode) {
+                        console.log(chalk.bold.green('>>> importing issue ' + issueURL));
                         if (!error && response.statusCode == 200) {
 
                             var $ = cheerio.load(htmlcode);
@@ -76,6 +76,12 @@ request(mailchimpOpts, function (error, response, jscode) {
                             $('#templateHeader').remove();
                             $('#templateFooter').remove();
                             $('#awesomewrap').remove();
+                            // replace the IDs with classes
+                            $('#bodyTable').addClass('bodyTable').removeAttr('id');
+                            $('#bodyCell').addClass('bodyCell').removeAttr('id');
+                            $('#templateContainer').addClass('templateContainer').removeAttr('id'); // will be replaced later
+                            $('#templateBody').addClass('templateBody').removeAttr('id');
+                            $('#templateColumns').addClass('templateColumns').removeAttr('id');
                             // cleanup all inline styles, decoration attributes, etc.
                             $('[style]').removeAttr('style');
                             $('[width]').removeAttr('width');
@@ -85,8 +91,23 @@ request(mailchimpOpts, function (error, response, jscode) {
                             $('[cellspacing]').removeAttr('cellspacing');
                             $('[cellpadding]').removeAttr('cellpadding');
                             $('[border]').removeAttr('border');
-                            // get the residual HTML chunk (and assign a class for the version of the template)
-                            htmlchunk = '<table id="#templateContainer" class="v1">' + $('body #templateContainer').html() + '</table>';
+                            // extract the partial elements
+                            var partImage = $('.mcnImageContent').html();
+                            var partCaption = $('.mcnImageBlock + .mcnTextBlock .mcnTextContent').html();
+                            var partCol1 = $('.leftColumnContainer .mcnTextContent').html();
+                            var partCol2 = $('.rightColumnContainer .mcnTextContent').html();
+                            // build a new HTML chunk (and assign a class for the version of the template)
+                            htmlchunk = '<div class="readingsBlock v1">';
+                            htmlchunk += '    <div class="iotd">';
+                            htmlchunk += '        <h5>IMAGE OF THE DAY</h5>';
+                            htmlchunk += '        <div class="figure">' + partImage + '</div>';
+                            htmlchunk += '        <div class="caption">' + partCaption + '</div>';
+                            htmlchunk += '    </div>';
+                            htmlchunk += '    <div class="cols">';
+                            htmlchunk += '        <div class="col">' + partCol1 + '</div>';
+                            htmlchunk += '        <div class="col">' + partCol2 + '</div>';
+                            htmlchunk += '    </div>';
+                            htmlchunk += '</div>';
                             // strip invisible spacing characters (e.g. &#xA0;)
                             htmlchunk = htmlchunk.replace(/&#xA0;/g,' ');
 
@@ -97,39 +118,6 @@ request(mailchimpOpts, function (error, response, jscode) {
                             issueDateParts[1] = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"][(issueDateParts[1]-1)];
                             // expose the full year
                             issueDateParts[2] = '20' + issueDateParts[2];
-
-                            // add the tags to the taxonomy (if not exist yet)
-                            var issueTagsId = [];
-                            issueTags.forEach(
-                                function(tag) {
-
-                                    // prepare the wp-post data
-                                    var wpOptsTags = {
-                                        method: 'POST',
-                                        url: config.wpApiUrl + '/tags',
-                                        headers: { 'Authorization': 'Basic ' + Buffer(config.wpAppUser + ':' + config.wpAppPass).toString('base64') },
-                                        json: true,
-                                        body: { name: tag }
-                                    };
-
-                                    request(wpOptsTags, function (error, response, body) {
-                                        if (!error && response.statusCode == 201) { // HTTP code = created
-                                            console.log('tag ' + chalk.bold.white(tag) + ' created');
-                                            issueTagsId.push(body.id);
-                                        } else {
-                                            if(body.code == 'term_exists') {
-                                                console.log('tag ' + tag + ' already exist');
-                                                issueTagsId.push(body.data);
-                                            } else {
-                                                console.log('response: ', response.statusCode);
-                                                console.log('error dump: ', error);
-                                                console.log('body: ', body);
-                                            }
-                                        }
-                                    });
-
-                                }
-                            );
 
                             // prepare the wp-post data
                             var wpOptsCreate = {
@@ -145,7 +133,8 @@ request(mailchimpOpts, function (error, response, jscode) {
                                     status: 'publish',
                                     comment_status: 'closed',
                                     format: 'standard',
-                                    tags: issueTagsId,
+                                    // tags: issueTagsId,
+                                    // tags: issueTags.join(','),
                                     // post_meta: [{ 'mailchimp_url' : issueURL }], // not working anymore :(
                                     author: 1
                                 }
@@ -170,7 +159,7 @@ request(mailchimpOpts, function (error, response, jscode) {
                                         }
                                     };
 
-                                    // post the the meta data
+                                    // add the meta data
                                     request(wpOptsMeta, function (error, response, body) {
                                         if (!error && response.statusCode == 201) { // HTTP code = created
                                             console.log('posted metadata for ID #' + postId);
@@ -181,8 +170,70 @@ request(mailchimpOpts, function (error, response, jscode) {
                                         }
                                     });
 
+                                    // add the tags to the taxonomy (if not exist yet) and then associate it to the post
+                                    issueTags.forEach(
+                                        function(tag) {
+
+                                            // prepare the wp-post data
+                                            var wpOptsTags = {
+                                                method: 'POST',
+                                                url: config.wpApiUrl + '/tags',
+                                                headers: { 'Authorization': 'Basic ' + Buffer(config.wpAppUser + ':' + config.wpAppPass).toString('base64') },
+                                                json: true,
+                                                body: { name: tag }
+                                            };
+
+                                            request(wpOptsTags, function (error, response, body) {
+                                                var tagId;
+                                                if (!error && response.statusCode == 201) { // HTTP code = created
+                                                    console.log('tag ' + chalk.bold.white(tag) + ' created');
+                                                    tagId = body.id;
+                                                } else {
+                                                    if(body.code == 'term_exists') {
+                                                        console.log('tag ' + tag + ' already exist');
+                                                        tagId = body.data;
+                                                    } else {
+                                                        console.log('response: ', response.statusCode);
+                                                        console.log('error dump: ', error);
+                                                        console.log('body: ', body);
+                                                    }
+                                                }
+
+                                                // add the tag
+                                                if (tagId) {
+
+                                                    // prepare the tags
+                                                    var wpOptsUpdate = {
+                                                        method: 'POST',
+                                                        url: config.wpApiUrl + '/posts/' + postId,
+                                                        headers: { 'Authorization': 'Basic ' + Buffer(config.wpAppUser + ':' + config.wpAppPass).toString('base64') },
+                                                        json: true,
+                                                        body: {
+                                                            append: true,
+                                                            tags: [tagId]
+                                                        }
+                                                    };
+
+                                                    // add the tags
+                                                    request(wpOptsUpdate, function (error, response, body) {
+                                                        if (!error && response.statusCode == 200) { // HTTP code = created
+                                                            console.log('posted tags for ID #' + postId);
+                                                        } else {
+                                                            console.log(chalk.bold.red('post tags for ID #' + postId + ' failed'));
+                                                            console.log('response: ', response);
+                                                            console.log('error dump: ', error);
+                                                        }
+                                                    });
+
+                                                }
+
+                                            });
+
+                                        }
+                                    );
+
                                 } else {
-                                    console.log(chalk.bold.red('post to WP failed with code'));
+                                    console.log(chalk.bold.red('post to WP failed with code ' + response.statusCode));
                                     console.log('response: ', response);
                                     console.log('error dump: ', error);
                                 }
