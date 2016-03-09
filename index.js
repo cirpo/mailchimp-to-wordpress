@@ -1,6 +1,9 @@
-var request = require('request');
-var cheerio = require('cheerio');
+var async = require('async');
 var chalk = require('chalk');
+var cheerio = require('cheerio');
+var q = require('bluebird');
+var request = require('request');
+var requestp = require('request-promise');
 
 var config = require('./config.js');
 
@@ -64,7 +67,11 @@ request(mailchimpOpts, function (error, response, jscode) {
 
                 console.log('going to add ' + chalk.bold.magenta(issuesMissing.length) + ' issues to Wordpress');
 
-                issuesMissing.forEach(function(issueURL){
+                // set up our queue (with max two parallel request otherwise the database returns because overloaded)
+                var queue = async.queue(function(issueURL, callback) {
+
+                    console.log(chalk.bold.green('>>> importing issue ' + issueURL));
+
                     request({method:'GET',url:issueURL,normalizeWhitespace:true}, function (error, response, htmlcode) {
                         console.log(chalk.bold.green('>>> importing issue ' + issueURL));
                         if (!error && response.statusCode == 200) {
@@ -182,66 +189,75 @@ request(mailchimpOpts, function (error, response, jscode) {
                                     });
 
                                     // add the tags to the taxonomy (if not exist yet) and then associate it to the post
-                                    issueTags.forEach(
-                                        function(tag) {
+                                    var proms = [];
+                                    var tagIDs = [];
+                                    issueTags.forEach(function(tag) {
 
-                                            // prepare the wp-post data
-                                            var wpOptsTags = {
-                                                method: 'POST',
-                                                url: config.wpApiUrl + '/tags',
-                                                headers: { 'Authorization': 'Basic ' + Buffer(config.wpAppUser + ':' + config.wpAppPass).toString('base64') },
-                                                json: true,
-                                                body: { name: tag }
-                                            };
+                                        // prepare the wp-post data
+                                        var wpOptsTags = {
+                                            method: 'POST',
+                                            url: config.wpApiUrl + '/tags',
+                                            headers: { 'Authorization': 'Basic ' + Buffer(config.wpAppUser + ':' + config.wpAppPass).toString('base64') },
+                                            json: true,
+                                            body: { name: tag }
+                                        };
 
-                                            request(wpOptsTags, function (error, response, body) {
-                                                var tagId;
-                                                if (!error && response.statusCode == 201) { // HTTP code = created
-                                                    console.log('tag ' + chalk.bold.white(tag) + ' created');
-                                                    tagId = body.id;
+                                        var prom = requestp(wpOptsTags)
+                                            .then(function (response) {
+                                                // POST succeeded...
+                                                var tagID = response.id;
+                                                console.log('tag ' + chalk.bold.white(tag) + ' created with ID #' + tagID);
+                                                tagIDs.push(tagID);
+                                            })
+                                            .catch(function (error) {
+                                                // POST failed...
+                                                if(error.error && error.error.code == 'term_exists') {
+                                                    var tagID = error.error.data;
+                                                    console.log('tag ' + tag + ' already exist with ID #' + tagID);
+                                                    tagIDs.push(tagID);
                                                 } else {
-                                                    if(body.code == 'term_exists') {
-                                                        console.log('tag ' + tag + ' already exist');
-                                                        tagId = body.data;
-                                                    } else {
-                                                        console.log('response: ', response.statusCode);
-                                                        console.log('error dump: ', error);
-                                                        console.log('body: ', body);
-                                                    }
+                                                    console.log('error dump: ', error);
                                                 }
-
-                                                // add the tag
-                                                if (tagId) {
-
-                                                    // prepare the tags
-                                                    var wpOptsUpdate = {
-                                                        method: 'POST',
-                                                        url: config.wpApiUrl + '/posts/' + postId,
-                                                        headers: { 'Authorization': 'Basic ' + Buffer(config.wpAppUser + ':' + config.wpAppPass).toString('base64') },
-                                                        json: true,
-                                                        body: {
-                                                            append: true,
-                                                            tags: [tagId]
-                                                        }
-                                                    };
-
-                                                    // add the tags
-                                                    request(wpOptsUpdate, function (error, response, body) {
-                                                        if (!error && response.statusCode == 200) { // HTTP code = created
-                                                            console.log('posted tags for ID #' + postId);
-                                                        } else {
-                                                            console.log(chalk.bold.red('post tags for ID #' + postId + ' failed'));
-                                                            console.log('response: ', response);
-                                                            console.log('error dump: ', error);
-                                                        }
-                                                    });
-
-                                                }
-
                                             });
 
+                                        proms.push(prom);
+
+                                    });
+
+                                    q.all(proms).then(function(results){
+
+                                        // add the tags to the post
+                                        if (tagIDs.length > 0) {
+
+                                            // prepare the tags
+                                            var wpOptsUpdate = {
+                                                method: 'POST',
+                                                url: config.wpApiUrl + '/posts/' + postId,
+                                                headers: { 'Authorization': 'Basic ' + Buffer(config.wpAppUser + ':' + config.wpAppPass).toString('base64') },
+                                                json: true,
+                                                body: {
+                                                    append: true,
+                                                    tags: tagIDs
+                                                }
+                                            };
+
+                                            // add the tags
+                                            request(wpOptsUpdate, function (error, response, body) {
+                                                if (!error && response.statusCode == 200) { // HTTP code = created
+                                                    console.log('posted tags for ID #' + postId);
+                                                } else {
+                                                    console.log(chalk.bold.red('post tags for ID #' + postId + ' failed'));
+                                                    console.log('response: ', response);
+                                                    console.log('error dump: ', error);
+                                                }
+                                                callback();
+                                            });
+
+                                        } else {
+                                            callback();
                                         }
-                                    );
+
+                                    });
 
                                 } else {
                                     console.log(chalk.bold.red('post to WP failed with code ' + response.statusCode));
@@ -253,7 +269,11 @@ request(mailchimpOpts, function (error, response, jscode) {
 
                         }
                     });
-                });
+
+                }, 2); // only allow 2 requests at a time
+
+                // push the list of missing issues/urls to the queue
+                queue.push(issuesMissing);
 
             }
         });
