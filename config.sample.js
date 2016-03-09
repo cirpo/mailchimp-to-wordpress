@@ -1,4 +1,5 @@
 var config = {
+    mailchimpUID : 'xxxxxxxxxxxx',
     mailchimpArchiveUrl : 'http://us1.campaign-archive2.com/generate-js/?u=xxxxxxxxxxxx&fid=yyyyy',
     mailchimpArchiveShow : '1000',
     wpApiUrl : 'http://www.wpwebsite.com/wp-json/wp/v2',

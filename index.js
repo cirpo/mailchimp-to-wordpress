@@ -1,9 +1,13 @@
 var request = require('request');
 var cheerio = require('cheerio');
-var _ = require('underscore');
 var chalk = require('chalk');
 
 var config = require('./config.js');
+
+var get_issue_id = function(url) {
+    var matches = url.match('/\?u=' + config.mailchimpUID + '&id=(.*)');
+    return (matches && matches.length > 1) ? matches[1] : '';
+};
 
 var mailchimpOpts = {
     method: 'GET',
@@ -24,7 +28,7 @@ request(mailchimpOpts, function (error, response, jscode) {
             issuesURL.push($(elem).attr('href'));
         });
 
-         // debug: trim the array
+        // debug: trim the array
         // issuesURL.length = 4;
 
        console.log('you have ' + chalk.bold.cyan(issuesURL.length) + ' issues in Mailchimp\'s archive');
@@ -36,22 +40,27 @@ request(mailchimpOpts, function (error, response, jscode) {
         };
 
         request(wpOptsList, function (error, response, posts) {
-            console.log('getting list of posts from Wordpress');
             if (!error && response.statusCode == 200) {
 
-                var postsIssueURL = [];
+                var postsIssuesUID = [];
 
-                // get already saved issues/posts using the 'mailchimp_url' meta as identifier
+                // get already saved issues/posts using the 'mailchimp_id' meta as identifier
                 posts.forEach(function(post){
-                    if(post.mailchimp_url && post.mailchimp_url.length > 0) {
-                        postsIssueURL.push(post.mailchimp_url[0]);
+                    if(post.mailchimp_id && post.mailchimp_id.length > 0) {
+                        postsIssuesUID.push(post.mailchimp_id[0]);
                     }
                 });
 
-                console.log('you have ' + chalk.bold.yellow(postsIssueURL.length) + ' issues in Wordpress');
+                console.log('you have ' + chalk.bold.yellow(postsIssuesUID.length) + ' issues already in Wordpress');
 
                 // get the issues that have not yet been saved
-                var issuesMissing = _.difference(issuesURL, postsIssueURL);
+                var issuesMissing = [];
+                issuesURL.forEach(function(url){
+                    var uid = get_issue_id(url);
+                    if(postsIssuesUID.indexOf(uid) < 0) {
+                        issuesMissing.push(url);
+                    }
+                });
 
                 console.log('going to add ' + chalk.bold.magenta(issuesMissing.length) + ' issues to Wordpress');
 
@@ -101,7 +110,9 @@ request(mailchimpOpts, function (error, response, jscode) {
                             htmlchunk += '    <div class="iotd">';
                             htmlchunk += '        <h5>IMAGE OF THE DAY</h5>';
                             htmlchunk += '        <div class="figure">' + partImage + '</div>';
-                            htmlchunk += '        <div class="caption">' + partCaption + '</div>';
+                            if(partCaption) {
+                                htmlchunk += '        <div class="caption">' + partCaption + '</div>';
+                            }
                             htmlchunk += '    </div>';
                             htmlchunk += '    <div class="cols">';
                             htmlchunk += '        <div class="col">' + partCol1 + '</div>';
@@ -154,8 +165,8 @@ request(mailchimpOpts, function (error, response, jscode) {
                                         headers: { 'Authorization': 'Basic ' + Buffer(config.wpAppUser + ':' + config.wpAppPass).toString('base64') },
                                         json: true,
                                         body: {
-                                            key: 'mailchimp_url',
-                                            value : issueURL
+                                            key: 'mailchimp_id',
+                                            value : get_issue_id(issueURL)
                                         }
                                     };
 
